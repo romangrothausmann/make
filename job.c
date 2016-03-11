@@ -231,6 +231,10 @@ static int good_stdin_used = 0;
 
 static struct child *waiting_jobs = 0;
 
+/* Chain of serial jobs waiting completion of parallel jobs. */
+
+static struct child *waiting_serial_jobs = 0;
+
 /* Non-zero if we use a *real* shell (always so on Unix).  */
 
 int unixy_shell = 1;
@@ -1695,7 +1699,9 @@ start_job_command (struct child *child)
 
 /* Try to start a child running.
    Returns nonzero if the child was started (and maybe finished), or zero if
-   the load was too high and the child was put on the 'waiting_jobs' chain.  */
+   the child was put on a waiting chain ('waiting_jobs' if the load was too
+   high, or 'waiting_serial_jobs' if the job was serial and should wait for
+   others to complete).  */
 
 static int
 start_waiting_job (struct child *c)
@@ -1709,19 +1715,26 @@ start_waiting_job (struct child *c)
   c->remote = start_remote_job_p (1);
 
   /* If we are running at least one job already and the load average
-     is too high, make this one wait.  */
+     is too high, make this one wait. If the job is serial and there is a job
+     running, also make it wait. */
   if (!c->remote
-      && ((job_slots_used > 0 && load_too_high ())
+      && ((job_slots_used > 0 && (load_too_high () || f->serial))
 #ifdef WINDOWS32
           || (process_used_slots () >= MAXIMUM_WAIT_OBJECTS)
 #endif
           ))
     {
       /* Put this child on the chain of children waiting for the load average
-         to go down.  */
+         or job numbers to go down.  */
       set_command_state (f, cs_running);
-      c->next = waiting_jobs;
-      waiting_jobs = c;
+      if(f->serial) {
+          c->next = waiting_serial_jobs;
+          waiting_serial_jobs = c;
+      }
+      else {
+          c->next = waiting_jobs;
+          waiting_jobs = c;
+      }
       return 0;
     }
 
@@ -1739,6 +1752,12 @@ start_waiting_job (struct child *c)
       /* One more job slot is in use.  */
       ++job_slots_used;
       unblock_sigs ();
+
+      /* Wait for completion if the job is serial. */
+      if(f->serial)
+        while (f->command_state == cs_running)
+          reap_children (1, 0);
+
       break;
 
     case cs_not_started:
@@ -2201,14 +2220,15 @@ load_too_high (void)
 #endif
 }
 
-/* Start jobs that are waiting for the load to be lower.  */
+/* Start jobs that are waiting for the load to be lower or for parallel
+   jobs to finish.  */
 
 void
 start_waiting_jobs (void)
 {
   struct child *job;
 
-  if (waiting_jobs == 0)
+  if (waiting_jobs == 0 && waiting_serial_jobs == 0)
     return;
 
   do
@@ -2217,13 +2237,22 @@ start_waiting_jobs (void)
       reap_children (0, 0);
 
       /* Take a job off the waiting list.  */
-      job = waiting_jobs;
-      waiting_jobs = job->next;
+      if(waiting_jobs)
+      {
+        job = waiting_jobs;
+        waiting_jobs = job->next;
+      }
+      else
+      {
+        job = waiting_serial_jobs;
+        waiting_serial_jobs = job->next;
+      }
 
       /* Try to start that job.  We break out of the loop as soon
          as start_waiting_job puts one back on the waiting list.  */
     }
-  while (start_waiting_job (job) && waiting_jobs != 0);
+  while (start_waiting_job (job)
+          && (waiting_jobs != 0 || waiting_serial_jobs != 0));
 
   return;
 }

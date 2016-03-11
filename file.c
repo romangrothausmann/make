@@ -772,6 +772,23 @@ snap_deps (void)
   if (f != 0 && f->is_target)
     not_parallel = 1;
 
+  for (f = lookup_file (".SERIAL"); f != 0; f = f->prev)
+    {
+      /* .SERIAL with deps listed
+	 marks those deps as targets that should not be built
+	 in parallel with other files, no matter what the -j
+	 setting. */
+      if (f->deps)
+        for (d = f->deps; d != 0; d = d->next)
+          for (f2 = d->file; f2 != 0; f2 = f2->prev)
+            f2->serial = 1;
+      /* .SERIAL with no deps listed marks *all* files that way,
+	 and is equivalent to .NOTPARALLEL. */
+      else
+          not_parallel = 1;
+    }
+
+
 #ifndef NO_MINUS_C_MINUS_O
   /* If .POSIX was defined, remove OUTPUT_OPTION to comply.  */
   /* This needs more work: what if the user sets this in the makefile?
