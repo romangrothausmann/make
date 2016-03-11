@@ -94,6 +94,8 @@ struct file
                                    pattern-specific variables.  */
     unsigned int considered:1;  /* equal to 'considered' if file has been
                                    considered on current scan of goal chain */
+    unsigned int serial:1;      /* Nonzero if the file can't be built in
+                                   parallel with others. */
   };
 
 
